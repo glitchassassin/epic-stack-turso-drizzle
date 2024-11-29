@@ -1,15 +1,17 @@
+import { invariant } from '@epic-web/invariant'
 import { test as base } from '@playwright/test'
-import { type User as UserModel } from '@prisma/client'
+import { eq, type InferSelectModel, sql } from 'drizzle-orm'
 import * as setCookieParser from 'set-cookie-parser'
 import {
 	getPasswordHash,
 	getSessionExpirationDate,
 	sessionKey,
 } from '#app/utils/auth.server.ts'
-import { prisma } from '#app/utils/db.server.ts'
+import { drizzle, first } from '#app/utils/db.server.ts'
 import { MOCK_CODE_GITHUB_HEADER } from '#app/utils/providers/constants.js'
 import { normalizeEmail } from '#app/utils/providers/provider.js'
 import { authSessionStorage } from '#app/utils/session.server.ts'
+import { Password, Role, RoleToUser, Session, User } from '#drizzle/schema.ts'
 import { createUser } from './db-utils.ts'
 import {
 	type GitHubUser,
@@ -21,9 +23,9 @@ export * from './db-utils.ts'
 
 type GetOrInsertUserOptions = {
 	id?: string
-	username?: UserModel['username']
+	username?: InferSelectModel<typeof User>['username']
 	password?: string
-	email?: UserModel['email']
+	email?: InferSelectModel<typeof User>['email']
 }
 
 type User = {
@@ -39,26 +41,47 @@ async function getOrInsertUser({
 	password,
 	email,
 }: GetOrInsertUserOptions = {}): Promise<User> {
-	const select = { id: true, email: true, username: true, name: true }
 	if (id) {
-		return await prisma.user.findUniqueOrThrow({
-			select,
-			where: { id: id },
+		const user = await drizzle.query.User.findFirst({
+			columns: { id: true, email: true, username: true, name: true },
+			where: eq(User.id, id),
 		})
+		invariant(user, 'User not found')
+		return user
 	} else {
 		const userData = createUser()
-		username ??= userData.username
-		password ??= userData.username
-		email ??= userData.email
-		return await prisma.user.create({
-			select,
-			data: {
-				...userData,
-				email,
-				username,
-				roles: { connect: { name: 'user' } },
-				password: { create: { hash: await getPasswordHash(password) } },
-			},
+		return await drizzle.transaction(async (tx) => {
+			username ??= userData.username
+			password ??= userData.username
+			email ??= userData.email
+			const user = await tx
+				.insert(User)
+				.values({
+					...userData,
+					email,
+					username,
+				})
+				.returning({
+					id: User.id,
+					email: User.email,
+					username: User.username,
+					name: User.name,
+				})
+				.then(first)
+			await tx.insert(RoleToUser).select(
+				tx
+					.select({
+						roleId: Role.id,
+						userId: sql`${user.id}`.as('userId'),
+					})
+					.from(Role)
+					.where(eq(Role.name, 'user')),
+			)
+			await tx.insert(Password).values({
+				hash: await getPasswordHash(password),
+				userId: user.id,
+			})
+			return user
 		})
 	}
 }
@@ -75,20 +98,21 @@ export const test = base.extend<{
 			userId = user.id
 			return user
 		})
-		await prisma.user.delete({ where: { id: userId } }).catch(() => {})
+		await drizzle.delete(User).where(eq(User.id, userId!))
 	},
 	login: async ({ page }, use) => {
 		let userId: string | undefined = undefined
 		await use(async (options) => {
 			const user = await getOrInsertUser(options)
 			userId = user.id
-			const session = await prisma.session.create({
-				data: {
+			const session = await drizzle
+				.insert(Session)
+				.values({
 					expirationDate: getSessionExpirationDate(),
 					userId: user.id,
-				},
-				select: { id: true },
-			})
+				})
+				.returning({ id: Session.id })
+				.then(first)
 
 			const authSession = await authSessionStorage.getSession()
 			authSession.set(sessionKey, session.id)
@@ -104,7 +128,7 @@ export const test = base.extend<{
 			await page.context().addCookies([newConfig])
 			return user
 		})
-		await prisma.user.deleteMany({ where: { id: userId } })
+		await drizzle.delete(User).where(eq(User.id, userId!))
 	},
 	prepareGitHubUser: async ({ page }, use, testInfo) => {
 		await page.route(/\/auth\/github(?!\/callback)/, async (route, request) => {
@@ -122,12 +146,13 @@ export const test = base.extend<{
 			return newGitHubUser
 		})
 
-		const user = await prisma.user.findUniqueOrThrow({
-			select: { id: true, name: true },
-			where: { email: normalizeEmail(ghUser!.primaryEmail) },
-		})
-		await prisma.user.delete({ where: { id: user.id } })
-		await prisma.session.deleteMany({ where: { userId: user.id } })
+		const [user] = await drizzle
+			.select({ id: User.id, name: User.name })
+			.from(User)
+			.where(eq(User.email, normalizeEmail(ghUser!.primaryEmail)))
+		invariant(user, 'User not found')
+		await drizzle.delete(Session).where(eq(Session.userId, user.id))
+		await drizzle.delete(User).where(eq(User.id, user.id))
 		await deleteGitHubUser(ghUser!.primaryEmail)
 	},
 })
