@@ -103,22 +103,30 @@ jobs:
       - name: 📥 Install Playwright Browsers
         run: npm run test:e2e:install
 
+      - name: 📥 Install Turso
+        run: |
+          curl -sSfL https://get.tur.so/install.sh | bash
+          echo "$HOME/.turso" >> $GITHUB_PATH
+        env:
+          TURSO_INSTALL_SKIP_SIGNUP: 1
+
       - name: 🛠 Setup Database
-        run: npx prisma migrate deploy
+        run: |
+          npm run db:dev &
+          npm run db:migrate
 
       - name: 🏦 Cache Database
         id: db-cache
         uses: actions/cache@v4
         with:
-          path: prisma/data.db
+          path: drizzle/data.db
           key:
-            db-cache-schema_${{ hashFiles('./prisma/schema.prisma')
-            }}-migrations_${{ hashFiles('./prisma/migrations/*/migration.sql')
-            }}
+            db-cache-schema_${{ hashFiles('./drizzle/schema.ts')
+            }}-migrations_${{ hashFiles('./drizzle/migrations/*.sql') }}
 
       - name: 🌱 Seed Database
         if: steps.db-cache.outputs.cache-hit != 'true'
-        run: npx prisma migrate reset --force
+        run: npm run db:seed
 
       - name: 🏗 Build
         run: npm run build

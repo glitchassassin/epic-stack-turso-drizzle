@@ -1,7 +1,8 @@
 import fs from 'node:fs'
 import { faker } from '@faker-js/faker'
-import { type NoteImage, type Note } from '@prisma/client'
-import { prisma } from '#app/utils/db.server.ts'
+import { type InferInsertModel } from 'drizzle-orm'
+import { drizzle, first } from '#app/utils/db.server.ts'
+import { Note, NoteImage } from '#drizzle/schema'
 import { expect, test } from '#tests/playwright-utils.ts'
 
 test('Users can create note with an image', async ({ page, login }) => {
@@ -62,13 +63,22 @@ test('Users can create note with multiple images', async ({ page, login }) => {
 test('Users can edit note image', async ({ page, login }) => {
 	const user = await login()
 
-	const note = await prisma.note.create({
-		select: { id: true },
-		data: {
-			...createNoteWithImage(),
+	const note = await drizzle
+		.insert(Note)
+		.values({
+			...createNote(),
 			ownerId: user.id,
-		},
-	})
+		})
+		.returning({ id: Note.id })
+		.then(first)
+	await drizzle
+		.insert(NoteImage)
+		.values({
+			...createNoteImage(),
+			noteId: note.id,
+		})
+		.returning({ id: NoteImage.id })
+
 	await page.goto(`/users/${user.username}/notes/${note.id}`)
 
 	// edit the image
@@ -88,13 +98,19 @@ test('Users can edit note image', async ({ page, login }) => {
 test('Users can delete note image', async ({ page, login }) => {
 	const user = await login()
 
-	const note = await prisma.note.create({
-		select: { id: true, title: true },
-		data: {
-			...createNoteWithImage(),
+	const note = await drizzle
+		.insert(Note)
+		.values({
+			...createNote(),
 			ownerId: user.id,
-		},
+		})
+		.returning({ id: Note.id, title: Note.title })
+		.then(first)
+	await drizzle.insert(NoteImage).values({
+		...createNoteImage(),
+		noteId: note.id,
 	})
+
 	await page.goto(`/users/${user.username}/notes/${note.id}`)
 
 	await expect(page.getByRole('heading', { name: note.title })).toBeVisible()
@@ -117,24 +133,12 @@ function createNote() {
 	return {
 		title: faker.lorem.words(3),
 		content: faker.lorem.paragraphs(3),
-	} satisfies Omit<Note, 'id' | 'createdAt' | 'updatedAt' | 'type' | 'ownerId'>
+	} satisfies Omit<InferInsertModel<typeof Note>, 'id' | 'type' | 'ownerId'>
 }
-function createNoteWithImage() {
+function createNoteImage() {
 	return {
-		...createNote(),
-		images: {
-			create: {
-				altText: 'cute koala',
-				contentType: 'image/png',
-				blob: fs.readFileSync(
-					'tests/fixtures/images/kody-notes/cute-koala.png',
-				),
-			},
-		},
-	} satisfies Omit<
-		Note,
-		'id' | 'createdAt' | 'updatedAt' | 'type' | 'ownerId'
-	> & {
-		images: { create: Pick<NoteImage, 'altText' | 'blob' | 'contentType'> }
-	}
+		altText: 'cute koala',
+		contentType: 'image/png',
+		blob: fs.readFileSync('tests/fixtures/images/kody-notes/cute-koala.png'),
+	} satisfies Omit<InferInsertModel<typeof NoteImage>, 'noteId'>
 }

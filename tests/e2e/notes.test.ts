@@ -1,5 +1,6 @@
 import { faker } from '@faker-js/faker'
-import { prisma } from '#app/utils/db.server.ts'
+import { drizzle, first } from '#app/utils/db.server.ts'
+import { Note } from '#drizzle/schema'
 import { expect, test } from '#tests/playwright-utils.ts'
 
 test('Users can create notes', async ({ page, login }) => {
@@ -20,10 +21,15 @@ test('Users can create notes', async ({ page, login }) => {
 test('Users can edit notes', async ({ page, login }) => {
 	const user = await login()
 
-	const note = await prisma.note.create({
-		select: { id: true },
-		data: { ...createNote(), ownerId: user.id },
-	})
+	const note = await drizzle
+		.insert(Note)
+		.values({
+			...createNote(),
+			ownerId: user.id,
+		})
+		.returning({ id: Note.id })
+		.then(first)
+
 	await page.goto(`/users/${user.username}/notes/${note.id}`)
 
 	// edit the note
@@ -44,10 +50,15 @@ test('Users can edit notes', async ({ page, login }) => {
 test('Users can delete notes', async ({ page, login }) => {
 	const user = await login()
 
-	const note = await prisma.note.create({
-		select: { id: true },
-		data: { ...createNote(), ownerId: user.id },
-	})
+	const note = await drizzle
+		.insert(Note)
+		.values({
+			...createNote(),
+			ownerId: user.id,
+		})
+		.returning({ id: Note.id })
+		.then(first)
+
 	await page.goto(`/users/${user.username}/notes/${note.id}`)
 
 	// find links with href prefix

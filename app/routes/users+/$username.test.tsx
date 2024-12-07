@@ -8,8 +8,9 @@ import setCookieParser from 'set-cookie-parser'
 import { test } from 'vitest'
 import { loader as rootLoader } from '#app/root.tsx'
 import { getSessionExpirationDate, sessionKey } from '#app/utils/auth.server.ts'
-import { prisma } from '#app/utils/db.server.ts'
+import { drizzle, first } from '#app/utils/db.server.ts'
 import { authSessionStorage } from '#app/utils/session.server.ts'
+import { Session, User, UserImage } from '#drizzle/schema.ts'
 import { createUser, getUserImages } from '#tests/db-utils.ts'
 import { default as UsernameRoute, loader } from './$username.tsx'
 
@@ -17,9 +18,14 @@ test('The user profile when not logged in as self', async () => {
 	const userImages = await getUserImages()
 	const userImage =
 		userImages[faker.number.int({ min: 0, max: userImages.length - 1 })]
-	const user = await prisma.user.create({
-		select: { id: true, username: true, name: true },
-		data: { ...createUser(), image: { create: userImage } },
+	const user = await drizzle
+		.insert(User)
+		.values(createUser())
+		.returning({ id: User.id, username: User.username, name: User.name })
+		.then(first)
+	await drizzle.insert(UserImage).values({
+		userId: user.id,
+		...userImage!,
 	})
 	const App = createRemixStub([
 		{
@@ -41,17 +47,23 @@ test('The user profile when logged in as self', async () => {
 	const userImages = await getUserImages()
 	const userImage =
 		userImages[faker.number.int({ min: 0, max: userImages.length - 1 })]
-	const user = await prisma.user.create({
-		select: { id: true, username: true, name: true },
-		data: { ...createUser(), image: { create: userImage } },
+	const user = await drizzle
+		.insert(User)
+		.values(createUser())
+		.returning({ id: User.id, username: User.username, name: User.name })
+		.then(first)
+	await drizzle.insert(UserImage).values({
+		userId: user.id,
+		...userImage!,
 	})
-	const session = await prisma.session.create({
-		select: { id: true },
-		data: {
+	const session = await drizzle
+		.insert(Session)
+		.values({
 			expirationDate: getSessionExpirationDate(),
 			userId: user.id,
-		},
-	})
+		})
+		.returning({ id: Session.id })
+		.then(first)
 
 	const authSession = await authSessionStorage.getSession()
 	authSession.set(sessionKey, session.id)
