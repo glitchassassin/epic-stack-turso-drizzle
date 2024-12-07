@@ -1,3 +1,11 @@
+# The Turso/Drizzle Variant
+
+This is a prototype variant of the Epic Stack with Turso and Drizzle instead of LiteFS and Prisma.
+
+This prototype is incomplete: the cache database still uses LiteFS, and I haven't deployed the app to Fly.io (though you can check out [another build](https://github.com/covenant-Foundry/covenantfoundry.com/) using Turso/Drizzle which *is* live). But feel free to use it for inspiration!
+
+---
+
 <div align="center">
   <h1 align="center"><a href="https://www.epicweb.dev/epic-stack">The Epic Stack 🚀</a></h1>
   <strong align="center">
